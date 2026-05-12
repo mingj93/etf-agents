@@ -106,19 +106,35 @@ Here are ETF-relevant articles from the last 24 hours:
 
 {articles_text}
 
-Write a concise morning brief with these three sections:
+Write a morning brief in exactly this structure, using Slack markdown (*bold* not **bold**, no # headers, no --- dividers):
 
-**Top Stories** — 3 to 5 bullets covering the most important ETF news. Lead with what happened, not just that something happened.
+*TL;DR*
+1. One sentence summary of story 1
+2. One sentence summary of story 2
+3. One sentence summary of story 3
+4. One sentence summary of story 4
+5. One sentence summary of story 5
+6. One sentence summary of story 6
+7. One sentence summary of story 7
+8. One sentence summary of story 8
+9. One sentence summary of story 9
+10. One sentence summary of story 10
 
-**Why It Matters** — 2 to 3 sentences on the broader significance. Connect dots across stories if relevant.
+*Top Stories*
+For each of the 10 stories, one bullet in this format:
+• *Headline* — 2-3 sentences on what happened and why it matters. Link formatted as <url|Source> (Slack format — never paste raw URLs).
 
-**Worth Watching** — 1 to 3 bullets on developing situations or early signals worth tracking over the coming days.
+*Why It Matters*
+2-3 sentences connecting the dots across today's stories.
 
-Style: tight, direct, industry-fluent. Assume deep familiarity with ETF mechanics, issuer dynamics, and regulatory landscape. Skip obvious context. Include article links where relevant."""
+*Worth Watching*
+2-3 bullets on situations to track over coming days.
+
+Style: tight, direct, industry-fluent. Assume deep ETF knowledge — skip basics. Use Slack link syntax <url|Source Name> for every link so URLs stay clean."""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1200,
+        max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
 

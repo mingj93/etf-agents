@@ -7,16 +7,19 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 FEEDS = [
+    # Specialist ETF sources (reliable)
     ("ETF Trends",           "https://www.etftrends.com/feed/"),
     ("ETF.com",              "https://www.etf.com/rss.xml"),
+    # Google News relays — surfaces headlines from WSJ, Bloomberg, FT, Reuters etc. without IP blocks
+    ("Google News: ETF",     "https://news.google.com/rss/search?q=ETF+exchange+traded+fund&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: ETF flows","https://news.google.com/rss/search?q=ETF+flows+fund+flows&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: ETF launch","https://news.google.com/rss/search?q=ETF+launch+new+fund+SEC&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: BlackRock ETF","https://news.google.com/rss/search?q=BlackRock+iShares+Vanguard+ETF&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: ETF regulation","https://news.google.com/rss/search?q=ETF+regulation+SEC+passive+investing&hl=en-US&gl=US&ceid=US:en"),
+    # Direct feeds that tend to work from cloud IPs
     ("Morningstar",          "https://www.morningstar.com/feeds/article.rss"),
     ("Pensions & Investments","https://www.pionline.com/rss/home"),
-    ("Reuters Business",     "https://feeds.reuters.com/reuters/businessNews"),
-    ("Reuters Finance",      "https://feeds.reuters.com/reuters/financialsNews"),
     ("CNBC Finance",         "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
-    ("WSJ Markets",          "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"),
-    ("Investment News",      "https://www.investmentnews.com/rss/home"),
-    ("Barron's",             "https://www.barrons.com/rss/other/barrons_online.xml"),
 ]
 
 ETF_KEYWORDS = [
@@ -47,12 +50,18 @@ def fetch_articles(hours=24):
 
     for source, url in FEEDS:
         try:
-            feed = feedparser.parse(url, request_headers={"User-Agent": "ETFNewsAgent/1.0"})
+            feed = feedparser.parse(url, request_headers={
+                "User-Agent": "Mozilla/5.0 (compatible; ETFNewsAgent/1.0)"
+            })
+            entry_count = len(feed.entries)
+            matched = 0
+
             for entry in feed.entries:
                 published = None
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
 
+                # Skip only if we have a date AND it's clearly too old
                 if published and published < cutoff:
                     continue
 
@@ -61,6 +70,7 @@ def fetch_articles(hours=24):
                 link = entry.get("link", "")
 
                 if is_etf_relevant(f"{title} {summary}"):
+                    matched += 1
                     articles.append({
                         "source": source,
                         "title": title,
@@ -68,8 +78,11 @@ def fetch_articles(hours=24):
                         "link": link,
                         "published": published.strftime("%Y-%m-%d %H:%M UTC") if published else "Unknown",
                     })
+
+            print(f"  {source}: {entry_count} entries, {matched} relevant")
+
         except Exception as e:
-            print(f"Warning: could not fetch {source}: {e}")
+            print(f"  {source}: FAILED — {e}")
 
     return articles
 

@@ -1,0 +1,25 @@
+name: ETF Daily Brief
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5"  # 7am ET (UTC-4 in summer) on weekdays
+  workflow_dispatch:         # lets you trigger it manually with one click
+
+jobs:
+  send-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ETF news agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python etf_news_agent.py

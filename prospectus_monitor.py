@@ -325,11 +325,22 @@ def main():
             filed = (src.get("file_date") or "")[:10]
             ciks = src.get("ciks", [])
 
+            # Pre-filter: skip obvious non-ETF entities (variable annuity/insurance funds,
+            # municipal bond funds, money market funds — these match "ETF" in boilerplate text)
+            entity_lower = entity.lower()
+            non_etf_signals = ["variable series", "variable insurance", "tax-free", "money market",
+                               "municipal", "muni bond", "separate account", "fixed income series"]
+            if any(s in entity_lower for s in non_etf_signals):
+                print(f"    SKIP: non-ETF entity name ({entity})")
+                processed.add(accession)
+                continue
+
             print(f"  {entity} / {accession}")
 
-            cik_str = str(ciks[0]) if ciks else None
-            print(f"    CIK={cik_str} accession={accession}")
-            doc_url = get_main_doc_url(accession, cik_str)
+            # Filing path always uses the filer's CIK = accession prefix (not the registrant CIK)
+            filer_cik = accession.split("-")[0].lstrip("0")
+            print(f"    filer_cik={filer_cik} registrant_ciks={ciks} accession={accession}")
+            doc_url = get_main_doc_url(accession, filer_cik)
             if not doc_url:
                 print(f"    SKIP: no document URL found in filing index")
                 processed.add(accession)

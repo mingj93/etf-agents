@@ -1,0 +1,48 @@
+name: ETF Prospectus Monitor
+
+on:
+  schedule:
+    - cron: "0 14 * * 1-5"  # 10am ET daily, weekdays
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: 'Days to look back (7 = normal, 30 = initial test)'
+        default: '7'
+        required: false
+      force_digest:
+        description: 'Force weekly Slack post even if not Monday (true/false)'
+        default: 'false'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic requests
+
+      - name: Run prospectus monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROSPECTUS_SLACK_WEBHOOK_URL: ${{ secrets.PROSPECTUS_SLACK_WEBHOOK_URL }}
+          LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '7' }}
+          FORCE_DIGEST: ${{ github.event.inputs.force_digest || 'false' }}
+        run: python prospectus_monitor.py
+
+      - name: Save state
+        run: |
+          git config user.name "ETF Prospectus Bot"
+          git config user.email "bot@github-actions.com"
+          git pull --rebase
+          git add prospectus_state.json
+          git diff --staged --quiet || git commit -m "Update prospectus state [skip ci]"
+          git push

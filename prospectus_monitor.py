@@ -290,18 +290,30 @@ def main():
         print(f"\n{form_type}...")
         hits = get_all_hits(form_type, start_dt, end_dt)
         print(f"  {len(hits)} hits")
+        if hits:
+            print(f"  _source keys: {list(hits[0].get('_source', {}).keys())}")
 
+        seen_accessions = set()
         for hit in hits:
             if new_count >= MAX_FILINGS_PER_RUN:
                 break
 
-            accession = hit.get("_id", "")
-            if not accession or accession in processed:
+            # EFTS _id is "{accession}:{document_name}" — strip the document part
+            raw_id = hit.get("_id", "")
+            accession = raw_id.split(":")[0]
+            if not accession or accession in processed or accession in seen_accessions:
                 continue
+            seen_accessions.add(accession)
 
             src = hit.get("_source", {})
-            entity = src.get("entity_name", "Unknown")
-            filed = (src.get("filed_at") or "")[:10]
+            # EFTS uses several possible field names for the entity
+            entity = (
+                src.get("entity_name")
+                or src.get("display_names", [{}])[0].get("name", "")
+                or src.get("filer_id", "")
+                or "Unknown"
+            )
+            filed = (src.get("filed_at") or src.get("file_date") or "")[:10]
 
             print(f"  {entity} / {accession}")
 

@@ -12,21 +12,26 @@ STATE_FILE = Path("daily_brief_seen.json")
 
 FEEDS = [
     # Specialist ETF sources
-    ("ETF Trends",           "https://www.etftrends.com/feed/"),
-    ("ETF.com",              "https://www.etf.com/rss.xml"),
-    ("RIABiz",               "https://riabiz.com/feed/"),
-    ("Citywire USA",         "https://citywire.com/usa/rss"),
-    # Google News relays — surfaces headlines from WSJ, Bloomberg, FT, Reuters etc.
-    ("Google News: ETF",     "https://news.google.com/rss/search?q=ETF+exchange+traded+fund&hl=en-US&gl=US&ceid=US:en"),
-    ("Google News: ETF flows","https://news.google.com/rss/search?q=ETF+flows+fund+flows&hl=en-US&gl=US&ceid=US:en"),
-    ("Google News: ETF launch","https://news.google.com/rss/search?q=ETF+launch+new+fund+SEC&hl=en-US&gl=US&ceid=US:en"),
+    ("ETF Trends",            "https://www.etftrends.com/feed/"),
+    ("ETF.com",               "https://www.etf.com/rss.xml"),
+    ("RIABiz",                "https://riabiz.com/feed/"),
+    ("Citywire USA",          "https://citywire.com/usa/rss"),
+    ("ThinkAdvisor",          "https://www.thinkadvisor.com/feed/"),
+    ("Investment News",       "https://www.investmentnews.com/rss/home"),
+    # Google News relays — Bloomberg, Reuters, FT, WSJ etc. without IP blocks
+    ("Google News: ETF",      "https://news.google.com/rss/search?q=ETF+exchange+traded+fund&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: ETF flows", "https://news.google.com/rss/search?q=ETF+flows+fund+flows&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: ETF launch","https://news.google.com/rss/search?q=ETF+launch+new+fund+SEC+filing&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: Bloomberg ETF","https://news.google.com/rss/search?q=Bloomberg+ETF+iShares+Vanguard&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: Reuters ETF","https://news.google.com/rss/search?q=Reuters+ETF+fund+flows+asset+management&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: BlackRock ETF","https://news.google.com/rss/search?q=BlackRock+iShares+Vanguard+ETF&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: ETF regulation","https://news.google.com/rss/search?q=ETF+regulation+SEC+passive+investing&hl=en-US&gl=US&ceid=US:en"),
-    ("Google News: RIA wealth","https://news.google.com/rss/search?q=RIA+ETF+wealth+management+advisor&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: RIA ETF",  "https://news.google.com/rss/search?q=RIA+ETF+wealth+management+advisor+model+portfolio&hl=en-US&gl=US&ceid=US:en"),
+    ("Google News: Morningstar ETF","https://news.google.com/rss/search?q=Morningstar+ETF+fund+rating&hl=en-US&gl=US&ceid=US:en"),
     # Direct feeds
-    ("Morningstar",          "https://www.morningstar.com/feeds/article.rss"),
-    ("Pensions & Investments","https://www.pionline.com/rss/home"),
-    ("CNBC Finance",         "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    ("Morningstar",           "https://www.morningstar.com/feeds/article.rss"),
+    ("Pensions & Investments", "https://www.pionline.com/rss/home"),
+    ("CNBC Finance",          "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
 ]
 
 ETF_KEYWORDS = [
@@ -81,10 +86,8 @@ def fetch_articles(hours=24):
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
 
-                # Require a date — undated articles are usually old/recycled content
-                if not published:
-                    continue
-                if published < cutoff:
+                # Skip if we have a date and it's too old; accept undated articles (URL dedup handles repeats)
+                if published and published < cutoff:
                     continue
 
                 link = entry.get("link", "")
@@ -119,8 +122,8 @@ def generate_brief(articles):
     if not articles:
         return "No ETF-relevant articles found in the last 24 hours."
 
-    # Cap at 15 to keep the prompt size manageable
-    articles = articles[:15]
+    # Cap at 25 to keep the prompt size manageable
+    articles = articles[:25]
 
     client = anthropic.Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],

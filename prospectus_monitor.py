@@ -39,7 +39,7 @@ def search_efts(form_type, start_dt, end_dt, from_offset=0):
     r = requests.get(
         "https://efts.sec.gov/LATEST/search-index",
         params={
-            "q":         '"exchange-traded fund" OR "exchange traded fund"',
+            "q":         '"exchange-traded fund" OR "exchange traded fund" OR "ETF"',
             "forms":     form_type,
             "dateRange": "custom",
             "startdt":   start_dt.strftime("%Y-%m-%d"),
@@ -107,8 +107,9 @@ def fetch_key_sections(doc_url):
         text = re.sub(r"\s+", " ", text).strip()
         lower = text.lower()
 
-        # Quick ETF relevance check
-        if "exchange-traded fund" not in lower and "exchange traded fund" not in lower:
+        # Quick ETF relevance check — any of these phrases confirms it's an ETF filing
+        etf_signals = ["exchange-traded fund", "exchange traded fund", " etf ", "etf share", "etf trust", "etfs"]
+        if not any(s in lower for s in etf_signals):
             return None
 
         # Find the most informative starting point
@@ -313,17 +314,19 @@ def main():
             print(f"  {entity} / {accession}")
 
             cik_str = str(ciks[0]) if ciks else None
+            print(f"    CIK={cik_str} accession={accession}")
             doc_url = get_main_doc_url(accession, cik_str)
             if not doc_url:
-                print(f"    No document URL, skipping")
+                print(f"    SKIP: no document URL found in filing index")
                 processed.add(accession)
                 continue
 
             text = fetch_key_sections(doc_url)
             if not text:
-                print(f"    Not ETF-relevant or fetch failed, skipping")
+                print(f"    SKIP: fetch failed or ETF signals not found in document")
                 processed.add(accession)
                 continue
+            print(f"    Got {len(text):,} chars")
 
             extracted = extract_filing(entity, form_type, filed, text)
             if not extracted:

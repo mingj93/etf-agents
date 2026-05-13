@@ -59,7 +59,7 @@ def get_all_hits(form_type, start_dt, end_dt):
     while True:
         hits, total = search_efts(form_type, start_dt, end_dt, offset)
         all_hits.extend(hits)
-        if not hits or len(all_hits) >= total:
+        if not hits or len(all_hits) >= total or len(all_hits) >= MAX_FILINGS_PER_RUN:
             break
         offset += 10
         time.sleep(0.3)
@@ -97,7 +97,7 @@ def get_main_doc_url(accession_no):
 def fetch_key_sections(doc_url):
     """Fetch the prospectus document and extract summary / principal strategies sections."""
     try:
-        r = requests.get(doc_url, headers=SEC_HEADERS, timeout=30)
+        r = requests.get(doc_url, headers=SEC_HEADERS, timeout=15)
         if r.status_code != 200:
             return None
 

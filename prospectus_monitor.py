@@ -292,11 +292,16 @@ def main():
     end_dt = datetime.now(timezone.utc)
     start_dt = end_dt - timedelta(days=lookback_days)
 
-    processed = set(state.get("processed_accessions", []))
-    weekly = state.get("weekly_extractions", [])
+    reset_state = os.environ.get("RESET_STATE", "false").lower() == "true"
+    if reset_state:
+        print("RESET_STATE=true — clearing processed accessions and weekly extractions.")
+        processed, weekly = set(), []
+    else:
+        processed = set(state.get("processed_accessions", []))
+        weekly = state.get("weekly_extractions", [])
     new_count = 0
 
-    print(f"Range: {start_dt.date()} → {end_dt.date()} | lookback={lookback_days}d | force_digest={force_digest}")
+    print(f"Range: {start_dt.date()} → {end_dt.date()} | lookback={lookback_days}d | force_digest={force_digest} | known_processed={len(processed)}")
 
     for form_type in FORM_TYPES:
         if new_count >= MAX_FILINGS_PER_RUN:

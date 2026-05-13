@@ -36,22 +36,31 @@ def save_state(state):
 
 def search_efts(form_type, start_dt, end_dt, from_offset=0):
     """Query EDGAR full-text search API for ETF-related filings."""
-    r = requests.get(
-        "https://efts.sec.gov/LATEST/search-index",
-        params={
-            "q":         '"exchange-traded fund" OR "exchange traded fund" OR "ETF"',
-            "forms":     form_type,
-            "dateRange": "custom",
-            "startdt":   start_dt.strftime("%Y-%m-%d"),
-            "enddt":     end_dt.strftime("%Y-%m-%d"),
-            "from":      from_offset,
-        },
-        headers=SEC_HEADERS,
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json().get("hits", {})
-    return data.get("hits", []), data.get("total", {}).get("value", 0)
+    # Use a tighter query for high-volume form types to avoid EFTS 500 errors
+    if form_type == "485BPOS":
+        query = '"exchange-traded fund" OR "exchange traded fund"'
+    else:
+        query = '"exchange-traded fund" OR "exchange traded fund" OR "ETF"'
+    try:
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={
+                "q":         query,
+                "forms":     form_type,
+                "dateRange": "custom",
+                "startdt":   start_dt.strftime("%Y-%m-%d"),
+                "enddt":     end_dt.strftime("%Y-%m-%d"),
+                "from":      from_offset,
+            },
+            headers=SEC_HEADERS,
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json().get("hits", {})
+        return data.get("hits", []), data.get("total", {}).get("value", 0)
+    except Exception as e:
+        print(f"  EFTS search error: {e}")
+        return [], 0
 
 
 def get_all_hits(form_type, start_dt, end_dt):
@@ -81,15 +90,20 @@ def get_main_doc_url(accession_no, cik=None):
         if r.status_code != 200:
             return None
         docs = r.json().get("documents", [])
+        # EDGAR index JSON uses "document" field (not "filename")
+        def docname(d):
+            return d.get("document") or d.get("filename") or ""
         # Prefer document whose type matches the form type
         for doc in docs:
+            name = docname(doc)
             if doc.get("type", "") in ("N-1A", "485APOS", "485BPOS", "PROSPECTUS") \
-                    and doc.get("filename", "").lower().endswith((".htm", ".html")):
-                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{doc['filename']}"
+                    and name.lower().endswith((".htm", ".html")):
+                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{name}"
         # Fallback: first HTM document
         for doc in docs:
-            if doc.get("filename", "").lower().endswith((".htm", ".html")):
-                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{doc['filename']}"
+            name = docname(doc)
+            if name.lower().endswith((".htm", ".html")):
+                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{name}"
     except Exception:
         pass
     return None

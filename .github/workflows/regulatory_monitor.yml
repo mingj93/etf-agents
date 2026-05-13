@@ -1,0 +1,25 @@
+name: Regulatory & Microstructure Monitor
+
+on:
+  schedule:
+    - cron: "0 11 * * 1"  # Every Monday at 7am ET
+  workflow_dispatch:
+
+jobs:
+  weekly-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic feedparser requests
+
+      - name: Run regulatory monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REGULATORY_SLACK_WEBHOOK_URL: ${{ secrets.REGULATORY_SLACK_WEBHOOK_URL }}
+        run: python regulatory_monitor.py

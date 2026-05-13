@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
@@ -26,6 +27,7 @@ COMPANIES = {
 
 STATE_FILE = Path("processed_filings.json")
 SEC_HEADERS = {"User-Agent": "ETFEarningsMonitor mingj93@gmail.com"}
+BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 
 def load_state():
@@ -69,6 +71,44 @@ def get_latest_10q(cik):
     return None
 
 
+def period_to_quarter(period_date):
+    """Convert a period-end date to a quarter label, e.g. '2025-03-31' → 'Q1 2025'."""
+    dt = datetime.strptime(period_date, "%Y-%m-%d")
+    q = (dt.month - 1) // 3 + 1
+    return f"Q{q} {dt.year}"
+
+
+def find_transcript(ticker, company_name, period):
+    """Try Motley Fool, then fall back gracefully. Returns (text, source_label)."""
+    quarter = period_to_quarter(period)
+
+    # 1. Try Motley Fool search
+    try:
+        search_url = (
+            f"https://www.fool.com/search/?q="
+            f"{requests.utils.quote(ticker + ' ' + quarter + ' earnings call transcript')}"
+        )
+        r = requests.get(search_url, headers=BROWSER_HEADERS, timeout=15)
+        if r.status_code == 200:
+            paths = re.findall(r'href="(/earnings/call-transcripts/[^"]+)"', r.text)
+            for path in paths[:3]:
+                transcript_url = "https://www.fool.com" + path
+                r2 = requests.get(transcript_url, headers=BROWSER_HEADERS, timeout=20)
+                if r2.status_code == 200:
+                    text = re.sub(r"<[^>]+>", " ", r2.text)
+                    text = re.sub(r"\s+", " ", text).strip()
+                    # Sanity-check: transcripts contain Q&A markers
+                    if len(text) > 4000 and any(w in text.lower() for w in ["operator", "question", "analyst"]):
+                        print(f"  Transcript: Motley Fool ({transcript_url})")
+                        return text[:30000], f"Motley Fool transcript · <{transcript_url}|link>"
+    except Exception as e:
+        print(f"  Motley Fool failed: {e}")
+
+    # 2. No transcript found
+    print(f"  Transcript: not found, using 10-Q only")
+    return None, None
+
+
 def fetch_filing_text(cik, accession, primary_doc):
     cik_int = int(cik)
     accession_clean = accession.replace("-", "")
@@ -94,10 +134,20 @@ def fetch_filing_text(cik, accession, primary_doc):
     return text[start: start + 40000]
 
 
-def analyze_filing(company_name, ticker, text, period):
+def analyze_filing(company_name, ticker, text, period, transcript=None):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=3)
 
-    prompt = f"""You are analyzing a 10-Q SEC filing from {company_name} ({ticker}) for the period ending {period}.
+    if transcript:
+        combined = (
+            f"=== 10-Q FILING (SEC EDGAR) ===\n{text}"
+            f"\n\n=== EARNINGS CALL TRANSCRIPT ===\n{transcript}"
+        )
+        source_note = "Sources: 10-Q filing + earnings call transcript."
+    else:
+        combined = text
+        source_note = "Source: 10-Q filing only (no transcript found)."
+
+    prompt = f"""You are analyzing SEC filings and earnings materials from {company_name} ({ticker}) for the period ending {period}. {source_note}
 
 The reader is a senior ETF industry professional — they know the industry deeply. Be specific and quantitative. Skip boilerplate.
 
@@ -131,8 +181,8 @@ Rules:
 - 2–4 tight bullets per section (except TL;DR which is 3–5)
 - Include specific numbers wherever available
 
-Filing text:
-{text}"""
+Filing material:
+{combined}"""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -158,7 +208,7 @@ def chunk_text(text, max_len=2900):
     return chunks
 
 
-def post_to_slack(company_name, ticker, period, analysis, filing_date, cik, accession):
+def post_to_slack(company_name, ticker, period, analysis, filing_date, cik, accession, transcript_source=None):
     webhook_url = os.environ["EARNINGS_SLACK_WEBHOOK_URL"]
 
     cik_int = int(cik)
@@ -167,16 +217,23 @@ def post_to_slack(company_name, ticker, period, analysis, filing_date, cik, acce
         f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_clean}/"
     )
 
+    quarter = period_to_quarter(period)
+    sources = f"<{filing_url}|10-Q on EDGAR>"
+    if transcript_source:
+        sources += f" · {transcript_source}"
+    else:
+        sources += " · _no transcript found_"
+
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{company_name} ({ticker}) — {period} 10-Q"},
+            "text": {"type": "plain_text", "text": f"{company_name} ({ticker}) — {quarter} Earnings"},
         },
         {
             "type": "context",
             "elements": [{
                 "type": "mrkdwn",
-                "text": f"Filed {filing_date} · <{filing_url}|View on SEC EDGAR>",
+                "text": f"Filed {filing_date} · {sources}",
             }],
         },
     ]
@@ -222,12 +279,14 @@ def main():
 
         try:
             text = fetch_filing_text(cik, accession, filing["primary_doc"])
-            print(f"  Fetched {len(text):,} chars")
+            print(f"  Fetched {len(text):,} chars of filing")
 
-            analysis = analyze_filing(company_name, ticker, text, filing["period"])
+            transcript, transcript_source = find_transcript(ticker, company_name, filing["period"])
+
+            analysis = analyze_filing(company_name, ticker, text, filing["period"], transcript)
             post_to_slack(
                 company_name, ticker, filing["period"],
-                analysis, filing["date"], cik, accession,
+                analysis, filing["date"], cik, accession, transcript_source,
             )
 
             state[ticker] = accession

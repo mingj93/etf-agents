@@ -106,15 +106,25 @@ def get_all_hits(forms, query, start_dt, end_dt):
 def doc_url_from_hit(hit):
     """
     EFTS _id format: "{accession}:{document_filename}"
-    The filer CIK is always the accession number prefix.
+    EDGAR stores filings under the REGISTRANT's CIK directory (ciks[0] from _source),
+    not the filing agent's CIK (which is the accession number prefix).
     """
     raw_id = hit.get("_id", "")
     if ":" not in raw_id:
         return None, None
     accession, doc_name = raw_id.split(":", 1)
-    filer_cik = accession.split("-")[0].lstrip("0")
     nodashes = accession.replace("-", "")
-    url = f"https://www.sec.gov/Archives/edgar/data/{filer_cik}/{nodashes}/{doc_name}"
+
+    src  = hit.get("_source", {})
+    ciks = src.get("ciks", [])
+    # ciks[0] is the registrant — that's the directory EDGAR uses for the filing
+    if ciks:
+        registrant_cik = str(ciks[0]).lstrip("0")
+    else:
+        # Fallback: use accession prefix (filer/submitter CIK — less reliable)
+        registrant_cik = accession.split("-")[0].lstrip("0")
+
+    url = f"https://www.sec.gov/Archives/edgar/data/{registrant_cik}/{nodashes}/{doc_name}"
     return accession, url
 
 

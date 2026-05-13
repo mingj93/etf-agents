@@ -13,8 +13,38 @@ import requests
 
 STATE_FILE = Path("prospectus_state.json")
 SEC_HEADERS = {"User-Agent": "ETFProspectusMonitor mingj93@gmail.com"}
-FORM_TYPES = ["N-1A", "485APOS", "485BPOS"]
-MAX_FILINGS_PER_RUN = 75  # cap to avoid GitHub Actions timeouts on large lookbacks
+MAX_FILINGS_PER_RUN = 75
+
+# Each config: what to search and which file_type marks the main prospectus document.
+# EFTS returns document-level hits; file_type tells us if it's the main doc or an exhibit.
+SEARCH_CONFIGS = [
+    {
+        "forms":           "N-1A",
+        "query":           '"exchange-traded fund" OR "exchange traded fund" OR "ETF"',
+        "main_file_types": {"N-1A"},
+    },
+    {
+        "forms":           "485APOS",
+        "query":           '"exchange-traded fund" OR "exchange traded fund" OR "ETF"',
+        "main_file_types": {"485APOS"},
+    },
+    {
+        "forms":           "485BPOS",
+        "query":           '"exchange-traded fund" OR "exchange traded fund"',
+        "main_file_types": {"485BPOS"},
+    },
+    {
+        # Grantor trusts and commodity/crypto ETFs register via S-1, not N-1A
+        "forms":           "S-1,S-1/A",
+        "query":           '"authorized participant" OR "creation basket" OR "exchange-traded"',
+        "main_file_types": {"S-1", "S-1/A"},
+    },
+]
+
+NON_ETF_SIGNALS = [
+    "variable series", "variable insurance", "tax-free", "money market",
+    "municipal", "muni bond", "separate account", "fixed income series",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -31,22 +61,16 @@ def save_state(state):
 
 
 # ---------------------------------------------------------------------------
-# EDGAR search
+# EDGAR search — document-level hits, paginated
 # ---------------------------------------------------------------------------
 
-def search_efts(form_type, start_dt, end_dt, from_offset=0):
-    """Query EDGAR full-text search API for ETF-related filings."""
-    # Use a tighter query for high-volume form types to avoid EFTS 500 errors
-    if form_type == "485BPOS":
-        query = '"exchange-traded fund" OR "exchange traded fund"'
-    else:
-        query = '"exchange-traded fund" OR "exchange traded fund" OR "ETF"'
+def search_efts(forms, query, start_dt, end_dt, from_offset=0):
     try:
         r = requests.get(
             "https://efts.sec.gov/LATEST/search-index",
             params={
                 "q":         query,
-                "forms":     form_type,
+                "forms":     forms,
                 "dateRange": "custom",
                 "startdt":   start_dt.strftime("%Y-%m-%d"),
                 "enddt":     end_dt.strftime("%Y-%m-%d"),
@@ -59,16 +83,16 @@ def search_efts(form_type, start_dt, end_dt, from_offset=0):
         data = r.json().get("hits", {})
         return data.get("hits", []), data.get("total", {}).get("value", 0)
     except Exception as e:
-        print(f"  EFTS search error: {e}")
+        print(f"  EFTS error: {e}")
         return [], 0
 
 
-def get_all_hits(form_type, start_dt, end_dt):
+def get_all_hits(forms, query, start_dt, end_dt):
     all_hits, offset = [], 0
     while True:
-        hits, total = search_efts(form_type, start_dt, end_dt, offset)
+        hits, total = search_efts(forms, query, start_dt, end_dt, offset)
         all_hits.extend(hits)
-        if not hits or len(all_hits) >= total or len(all_hits) >= MAX_FILINGS_PER_RUN:
+        if not hits or len(all_hits) >= total or len(all_hits) >= MAX_FILINGS_PER_RUN * 3:
             break
         offset += 10
         time.sleep(0.3)
@@ -76,44 +100,39 @@ def get_all_hits(form_type, start_dt, end_dt):
 
 
 # ---------------------------------------------------------------------------
-# Document fetching
+# Document URL — parsed directly from EFTS _id (no index file needed)
 # ---------------------------------------------------------------------------
 
-def get_main_doc_url(accession_no, cik=None):
-    """Derive filing index URL from accession number and find the main HTM document."""
-    if not cik:
-        cik = accession_no.split("-")[0].lstrip("0")
-    nodashes = accession_no.replace("-", "")
-    index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{accession_no}-index.json"
-    try:
-        r = requests.get(index_url, headers=SEC_HEADERS, timeout=10)
-        if r.status_code != 200:
-            return None
-        docs = r.json().get("documents", [])
-        # EDGAR index JSON uses "document" field (not "filename")
-        def docname(d):
-            return d.get("document") or d.get("filename") or ""
-        # Prefer document whose type matches the form type
-        for doc in docs:
-            name = docname(doc)
-            if doc.get("type", "") in ("N-1A", "485APOS", "485BPOS", "PROSPECTUS") \
-                    and name.lower().endswith((".htm", ".html")):
-                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{name}"
-        # Fallback: first HTM document
-        for doc in docs:
-            name = docname(doc)
-            if name.lower().endswith((".htm", ".html")):
-                return f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{name}"
-    except Exception:
-        pass
-    return None
+def doc_url_from_hit(hit):
+    """
+    EFTS _id format: "{accession}:{document_filename}"
+    The filer CIK is always the accession number prefix.
+    """
+    raw_id = hit.get("_id", "")
+    if ":" not in raw_id:
+        return None, None
+    accession, doc_name = raw_id.split(":", 1)
+    filer_cik = accession.split("-")[0].lstrip("0")
+    nodashes = accession.replace("-", "")
+    url = f"https://www.sec.gov/Archives/edgar/data/{filer_cik}/{nodashes}/{doc_name}"
+    return accession, url
+
+
+# ---------------------------------------------------------------------------
+# Document fetch and ETF relevance check
+# ---------------------------------------------------------------------------
+
+ETF_SIGNALS = [
+    "exchange-traded fund", "exchange traded fund", " etf ", "etf share",
+    "etf trust", "etfs", "authorized participant", "creation basket",
+]
 
 
 def fetch_key_sections(doc_url):
-    """Fetch the prospectus document and extract summary / principal strategies sections."""
     try:
         r = requests.get(doc_url, headers=SEC_HEADERS, timeout=15)
         if r.status_code != 200:
+            print(f"    HTTP {r.status_code}")
             return None
 
         text = re.sub(r"<[^>]+>", " ", r.text)
@@ -121,30 +140,25 @@ def fetch_key_sections(doc_url):
         text = re.sub(r"\s+", " ", text).strip()
         lower = text.lower()
 
-        # Quick ETF relevance check — any of these phrases confirms it's an ETF filing
-        etf_signals = ["exchange-traded fund", "exchange traded fund", " etf ", "etf share", "etf trust", "etfs"]
-        if not any(s in lower for s in etf_signals):
+        if not any(s in lower for s in ETF_SIGNALS):
+            print(f"    No ETF signals in document")
             return None
 
-        # Find the most informative starting point
-        for marker in [
-            "principal investment strategies",
-            "investment objective",
-            "fees and expenses",
-            "fund summary",
-        ]:
+        for marker in ["principal investment strategies", "investment objective",
+                       "fees and expenses", "fund summary", "use of proceeds"]:
             idx = lower.find(marker)
             if idx > 500:
                 return text[max(0, idx - 300): idx + 12000]
 
-        return text[1000:13000]  # fallback
+        return text[1000:13000]
 
-    except Exception:
+    except Exception as e:
+        print(f"    Fetch error: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
-# Claude: per-filing extraction (cheap — ~$0.003 each)
+# Claude: per-filing extraction (~$0.003 each)
 # ---------------------------------------------------------------------------
 
 def extract_filing(entity_name, form_type, filed_date, text):
@@ -165,19 +179,14 @@ Return ONLY a JSON object — no markdown, no explanation:
   "notes": "anything notable for an ETF professional, or empty string"
 }}
 
-distinctive_features — include any that apply:
-options-income, defined-outcome/buffer, single-stock, ETF-share-class-of-mutual-fund,
-tokenized, 24h-trading, novel-custody, crypto/digital-asset, leveraged, inverse,
-active-nontransparent, multi-share-class, interval-fund
+distinctive_features options: options-income, defined-outcome/buffer, single-stock,
+ETF-share-class-of-mutual-fund, tokenized, 24h-trading, novel-custody,
+crypto/digital-asset, leveraged, inverse, active-nontransparent, multi-share-class.
 
-launch_type rules:
-- new_fund: N-1A initial registration, or 485APOS adding a genuinely new series
-- amendment_substantive: meaningful change — new strategy, fee cut, new share class
-- amendment_routine: board/officer changes, generic disclosure edits, no strategic change
-- conversion: mutual fund converting to ETF structure
-- new_share_class: adding a share class to an existing ETF
-
-Set surface=false for amendment_routine. Set surface=true for everything else.
+launch_type: new_fund for N-1A or S-1 initial registrations and 485APOS adding a new series;
+amendment_substantive for fee cuts, strategy shifts, new share class;
+amendment_routine for board/officer/disclosure-only changes (set surface=false for these);
+conversion for mutual-fund-to-ETF conversions.
 
 Text:
 {text[:7000]}"""
@@ -217,27 +226,27 @@ def synthesize(extractions):
 Filings (JSON):
 {json.dumps(notable, indent=2)}
 
-Write the digest in Slack markdown (*bold* not **bold**, no # headers). Include only sections that have content — omit empty ones entirely:
+Write the digest in Slack markdown (*bold* not **bold**, no # headers). Include only sections that have content:
 
 *New Launches*
-Each genuinely new ETF: one bullet — fund name, sponsor, strategy in one clause, expense ratio, any distinctive features.
+Each genuinely new ETF: fund name, sponsor, one-clause strategy, expense ratio, distinctive features.
 
 *New Issuers Entering the Market*
-First-time ETF filers. Who are they, what are they launching, why does it matter?
+First-time ETF filers — who they are, what they're launching, why it matters.
 
 *Structural Innovations*
-Novel mechanics, structures, or product types. Group similar ones together.
+Novel mechanics or product types. Group similar ones.
 
 *Thematic Clusters*
-Multiple sponsors filing similar strategies this week — surface the pattern, name all of them.
+Multiple sponsors filing similar strategies — surface the pattern, name all of them.
 
 *Notable Fee Moves*
-Sub-10bps launches or amendment fee cuts. Flag anything competitively significant.
+Sub-10bps launches or fee cuts on amendments.
 
 *Mutual Fund Conversions*
-Any fund converting to ETF structure.
+Funds converting to ETF structure.
 
-Lead each section with the most notable item. Be specific — name funds and sponsors. One bullet per fund unless clustering."""
+Lead each section with the most notable item. Name funds and sponsors specifically."""
 
     resp = client.messages.create(
         model="claude-sonnet-4-6",
@@ -286,93 +295,89 @@ def post_to_slack(digest, n_filings):
 def main():
     state = load_state()
     lookback_days = int(os.environ.get("LOOKBACK_DAYS", "7"))
-    force_digest = os.environ.get("FORCE_DIGEST", "false").lower() == "true"
-    is_monday = datetime.now().weekday() == 0
+    force_digest  = os.environ.get("FORCE_DIGEST",  "false").lower() == "true"
+    reset_state   = os.environ.get("RESET_STATE",   "false").lower() == "true"
+    is_monday     = datetime.now().weekday() == 0
 
-    end_dt = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(days=lookback_days)
-
-    reset_state = os.environ.get("RESET_STATE", "false").lower() == "true"
     if reset_state:
-        print("RESET_STATE=true — clearing processed accessions and weekly extractions.")
+        print("RESET_STATE=true — clearing state.")
         processed, weekly = set(), []
     else:
         processed = set(state.get("processed_accessions", []))
-        weekly = state.get("weekly_extractions", [])
+        weekly    = state.get("weekly_extractions", [])
+
+    end_dt   = datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(days=lookback_days)
     new_count = 0
 
-    print(f"Range: {start_dt.date()} → {end_dt.date()} | lookback={lookback_days}d | force_digest={force_digest} | known_processed={len(processed)}")
+    print(f"Range: {start_dt.date()} → {end_dt.date()} | lookback={lookback_days}d | known_processed={len(processed)}")
 
-    for form_type in FORM_TYPES:
+    for cfg in SEARCH_CONFIGS:
         if new_count >= MAX_FILINGS_PER_RUN:
             print("Per-run cap reached.")
             break
 
-        print(f"\n{form_type}...")
-        hits = get_all_hits(form_type, start_dt, end_dt)
-        print(f"  {len(hits)} hits")
-        if hits:
-            print(f"  _source keys: {list(hits[0].get('_source', {}).keys())}")
+        forms           = cfg["forms"]
+        query           = cfg["query"]
+        main_file_types = cfg["main_file_types"]
+
+        print(f"\n{forms}...")
+        hits = get_all_hits(forms, query, start_dt, end_dt)
+        print(f"  {len(hits)} document hits")
 
         seen_accessions = set()
         for hit in hits:
             if new_count >= MAX_FILINGS_PER_RUN:
                 break
 
-            src = hit.get("_source", {})
-            accession = src.get("adsh") or hit.get("_id", "").split(":")[0]
-            if not accession or accession in processed or accession in seen_accessions:
+            src       = hit.get("_source", {})
+            file_type = src.get("file_type", "")
+
+            # Skip exhibits — only process the main prospectus document
+            if file_type not in main_file_types:
+                continue
+
+            accession, doc_url = doc_url_from_hit(hit)
+            if not accession or not doc_url:
+                continue
+            if accession in processed or accession in seen_accessions:
                 continue
             seen_accessions.add(accession)
 
-            names = src.get("display_names", [])
+            names  = src.get("display_names", [])
             entity = names[0] if isinstance(names, list) and names else "Unknown"
-            filed = (src.get("file_date") or "")[:10]
-            ciks = src.get("ciks", [])
+            filed  = (src.get("file_date") or "")[:10]
 
-            # Pre-filter: skip obvious non-ETF entities (variable annuity/insurance funds,
-            # municipal bond funds, money market funds — these match "ETF" in boilerplate text)
-            entity_lower = entity.lower()
-            non_etf_signals = ["variable series", "variable insurance", "tax-free", "money market",
-                               "municipal", "muni bond", "separate account", "fixed income series"]
-            if any(s in entity_lower for s in non_etf_signals):
-                print(f"    SKIP: non-ETF entity name ({entity})")
+            # Skip obvious non-ETF filers
+            if any(s in entity.lower() for s in NON_ETF_SIGNALS):
+                print(f"  SKIP non-ETF: {entity}")
                 processed.add(accession)
                 continue
 
-            print(f"  {entity} / {accession}")
-
-            # Filing path always uses the filer's CIK = accession prefix (not the registrant CIK)
-            filer_cik = accession.split("-")[0].lstrip("0")
-            print(f"    filer_cik={filer_cik} registrant_ciks={ciks} accession={accession}")
-            doc_url = get_main_doc_url(accession, filer_cik)
-            if not doc_url:
-                print(f"    SKIP: no document URL found in filing index")
-                processed.add(accession)
-                continue
+            print(f"  {entity} | {accession}")
+            print(f"    {doc_url}")
 
             text = fetch_key_sections(doc_url)
             if not text:
-                print(f"    SKIP: fetch failed or ETF signals not found in document")
                 processed.add(accession)
                 continue
             print(f"    Got {len(text):,} chars")
 
-            extracted = extract_filing(entity, form_type, filed, text)
+            extracted = extract_filing(entity, forms.split(",")[0], filed, text)
             if not extracted:
                 processed.add(accession)
                 continue
 
-            lt = extracted.get("launch_type", "?")
-            fn = extracted.get("fund_name") or "?"
-            er = extracted.get("expense_ratio", "?")
+            lt   = extracted.get("launch_type", "?")
+            fn   = extracted.get("fund_name") or "?"
+            er   = extracted.get("expense_ratio", "?")
             surf = extracted.get("surface", False)
             print(f"    → {lt}: {fn} | {er} | surface={surf}")
 
             weekly.append({
                 "accession":   accession,
                 "entity_name": entity,
-                "form_type":   form_type,
+                "form_type":   forms.split(",")[0],
                 "filed_date":  filed,
                 "extracted":   extracted,
             })
@@ -392,9 +397,8 @@ def main():
     elif is_monday or force_digest:
         print("Nothing to synthesize.")
 
-    # Keep last 1000 accessions to prevent unbounded growth
     state["processed_accessions"] = list(processed)[-1000:]
-    state["weekly_extractions"] = weekly
+    state["weekly_extractions"]   = weekly
     save_state(state)
     print("Done.")
 

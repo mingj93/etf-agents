@@ -147,33 +147,51 @@ Style: tight, direct, industry-fluent. Assume deep ETF knowledge — skip basics
     return response.content[0].text
 
 
+def chunk_text(text, max_len=2900):
+    """Split text into chunks that fit within Slack's block size limit."""
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
 def post_to_slack(brief, article_count, source_count):
     webhook_url = os.environ["SLACK_WEBHOOK_URL"]
     date_str = datetime.now().strftime("%A, %B %d")
 
-    payload = {
-        "blocks": [
-            {
-                "type": "header",
-                "text": {"type": "plain_text", "text": f"ETF Morning Brief — {date_str}"},
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": brief},
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": f"_{article_count} relevant articles from {source_count} sources_",
-                    }
-                ],
-            },
-        ]
-    }
+    blocks = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"ETF Morning Brief — {date_str}"},
+        }
+    ]
 
-    response = requests.post(webhook_url, json=payload, timeout=10)
+    for chunk in chunk_text(brief):
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": chunk},
+        })
+
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": f"_{article_count} relevant articles from {source_count} sources_",
+            }
+        ],
+    })
+
+    response = requests.post(webhook_url, json={"blocks": blocks}, timeout=10)
     response.raise_for_status()
     print(f"Slack: {response.status_code}")
 

@@ -91,7 +91,13 @@ def generate_brief(articles):
     if not articles:
         return "No ETF-relevant articles found in the last 24 hours."
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # Cap at 25 to keep the prompt size manageable
+    articles = articles[:25]
+
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        max_retries=3,
+    )
 
     articles_text = "\n\n".join(
         f"SOURCE: {a['source']}\nTITLE: {a['title']}\nSUMMARY: {a['summary']}\nLINK: {a['link']}"

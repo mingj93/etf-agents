@@ -3,7 +3,10 @@ name: ETF Daily Brief
 on:
   schedule:
     - cron: "0 11 * * 1-5"  # 7am ET (UTC-4 in summer) on weekdays
-  workflow_dispatch:         # lets you trigger it manually with one click
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   send-brief:
@@ -23,3 +26,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python etf_news_agent.py
+
+      - name: Save seen URLs
+        run: |
+          git config user.name "ETF News Bot"
+          git config user.email "bot@github-actions.com"
+          git pull --rebase --autostash
+          git add daily_brief_seen.json
+          git diff --staged --quiet || git commit -m "Update daily brief seen URLs [skip ci]"
+          git push

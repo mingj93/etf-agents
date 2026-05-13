@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
 import feedparser
 import anthropic
 import requests
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+STATE_FILE = Path("daily_brief_seen.json")
 
 FEEDS = [
-    # Specialist ETF sources (reliable)
+    # Specialist ETF sources
     ("ETF Trends",           "https://www.etftrends.com/feed/"),
     ("ETF.com",              "https://www.etf.com/rss.xml"),
-    # Google News relays — surfaces headlines from WSJ, Bloomberg, FT, Reuters etc. without IP blocks
+    ("RIABiz",               "https://riabiz.com/feed/"),
+    ("Citywire USA",         "https://citywire.com/usa/rss"),
+    # Google News relays — surfaces headlines from WSJ, Bloomberg, FT, Reuters etc.
     ("Google News: ETF",     "https://news.google.com/rss/search?q=ETF+exchange+traded+fund&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: ETF flows","https://news.google.com/rss/search?q=ETF+flows+fund+flows&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: ETF launch","https://news.google.com/rss/search?q=ETF+launch+new+fund+SEC&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: BlackRock ETF","https://news.google.com/rss/search?q=BlackRock+iShares+Vanguard+ETF&hl=en-US&gl=US&ceid=US:en"),
     ("Google News: ETF regulation","https://news.google.com/rss/search?q=ETF+regulation+SEC+passive+investing&hl=en-US&gl=US&ceid=US:en"),
-    # Direct feeds that tend to work from cloud IPs
+    ("Google News: RIA wealth","https://news.google.com/rss/search?q=RIA+ETF+wealth+management+advisor&hl=en-US&gl=US&ceid=US:en"),
+    # Direct feeds
     ("Morningstar",          "https://www.morningstar.com/feeds/article.rss"),
     ("Pensions & Investments","https://www.pionline.com/rss/home"),
     ("CNBC Finance",         "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
@@ -44,9 +51,22 @@ def strip_html(text):
     return re.sub(r"<[^>]+>", "", text or "")
 
 
+def load_seen_urls():
+    if STATE_FILE.exists():
+        return set(json.loads(STATE_FILE.read_text()))
+    return set()
+
+
+def save_seen_urls(urls):
+    # Keep only the most recent 500 URLs to prevent unbounded growth
+    STATE_FILE.write_text(json.dumps(list(urls)[-500:]))
+
+
 def fetch_articles(hours=24):
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    seen_urls = load_seen_urls()
     articles = []
+    seen_links = set()
 
     for source, url in FEEDS:
         try:
@@ -61,13 +81,21 @@ def fetch_articles(hours=24):
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
                     published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
 
-                # Skip only if we have a date AND it's clearly too old
-                if published and published < cutoff:
+                # Require a date — undated articles are usually old/recycled content
+                if not published:
                     continue
+                if published < cutoff:
+                    continue
+
+                link = entry.get("link", "")
+
+                # Skip articles seen in yesterday's brief
+                if link in seen_urls or link in seen_links:
+                    continue
+                seen_links.add(link)
 
                 title = strip_html(entry.get("title", ""))
                 summary = strip_html(entry.get("summary", "") or entry.get("description", ""))
-                link = entry.get("link", "")
 
                 if is_etf_relevant(f"{title} {summary}"):
                     matched += 1
@@ -76,15 +104,15 @@ def fetch_articles(hours=24):
                         "title": title,
                         "summary": summary[:600],
                         "link": link,
-                        "published": published.strftime("%Y-%m-%d %H:%M UTC") if published else "Unknown",
+                        "published": published.strftime("%Y-%m-%d %H:%M UTC"),
                     })
 
-            print(f"  {source}: {entry_count} entries, {matched} relevant")
+            print(f"  {source}: {entry_count} entries, {matched} new & relevant")
 
         except Exception as e:
             print(f"  {source}: FAILED — {e}")
 
-    return articles
+    return articles, seen_links
 
 
 def generate_brief(articles):
@@ -199,8 +227,8 @@ def post_to_slack(brief, article_count, source_count):
 
 def main():
     print("Fetching articles...")
-    articles = fetch_articles(hours=24)
-    print(f"Found {len(articles)} relevant articles")
+    articles, all_seen_links = fetch_articles(hours=24)
+    print(f"Found {len(articles)} new relevant articles")
 
     print("Generating brief...")
     brief = generate_brief(articles)
@@ -209,6 +237,10 @@ def main():
     print("Posting to Slack...")
     sources_hit = len({a["source"] for a in articles})
     post_to_slack(brief, len(articles), sources_hit)
+
+    # Save all links seen today so tomorrow's run skips them
+    save_seen_urls(all_seen_links)
+    print(f"Saved {len(all_seen_links)} URLs to seen state.")
     print("Done.")
 
 

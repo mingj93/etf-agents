@@ -42,7 +42,7 @@ jobs:
         run: |
           git config user.name "ETF Prospectus Bot"
           git config user.email "bot@github-actions.com"
-          git pull --rebase
+          git pull --rebase --autostash
           git add prospectus_state.json
           git diff --staged --quiet || git commit -m "Update prospectus state [skip ci]"
           git push

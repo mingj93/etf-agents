@@ -33,4 +33,5 @@ jobs:
           git config user.email "bot@github-actions.com"
           git add processed_filings.json
           git diff --staged --quiet || git commit -m "Update processed filings state [skip ci]"
+          git pull --rebase --autostash
           git push

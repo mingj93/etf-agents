@@ -16,11 +16,12 @@ COMPANIES = {
     "IVZ":  "Invesco",
     "BEN":  "Franklin Templeton",
     "WETF": "WisdomTree",
-    "AMG":  "Affiliated Managers Group",
     "SEIC": "SEI Investments",
-    "APAM": "Artisan Partners",
     "CNS":  "Cohen & Steers",
     "VRTS": "Virtus Investment Partners",
+    "SCHW": "Charles Schwab",
+    "VCSY": "Victory Capital",
+    "GS":   "Goldman Sachs (GSAM)",
 }
 
 STATE_FILE = Path("processed_filings.json")
@@ -112,10 +113,22 @@ Extract what's available under these headings (omit any section with no relevant
 
 *Surprises or Flags* — anything unusual, a miss vs expectations, or an early signal worth tracking.
 
+Then end with a divider and this section:
+
+---
+
+*TL;DR*
+3–5 bullets summarising this filing. Prioritise in this order:
+1. AUM change (absolute figure and direction)
+2. Any fee or revenue yield movement
+3. Shifts in how management is talking about the ETF business — more/less emphasis, new framing, change in tone
+4. Any mention of distribution, model portfolios, RIA channel, or wealth management partnerships
+5. Anything else materially new
+
 Rules:
 - Use Slack markdown (*bold*, not **bold**)
 - First line must be the single most important takeaway — lead with it, no preamble
-- 2–4 tight bullets per section
+- 2–4 tight bullets per section (except TL;DR which is 3–5)
 - Include specific numbers wherever available
 
 Filing text:
@@ -123,7 +136,7 @@ Filing text:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
+        max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.content[0].text

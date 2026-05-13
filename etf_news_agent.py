@@ -91,8 +91,8 @@ def generate_brief(articles):
     if not articles:
         return "No ETF-relevant articles found in the last 24 hours."
 
-    # Cap at 25 to keep the prompt size manageable
-    articles = articles[:25]
+    # Cap at 15 to keep the prompt size manageable
+    articles = articles[:15]
 
     client = anthropic.Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
@@ -100,11 +100,12 @@ def generate_brief(articles):
     )
 
     articles_text = "\n\n".join(
-        f"SOURCE: {a['source']}\nTITLE: {a['title']}\nSUMMARY: {a['summary']}\nLINK: {a['link']}"
+        f"SOURCE: {a['source']}\nTITLE: {a['title']}\nSUMMARY: {a['summary'][:300]}\nLINK: {a['link']}"
         for a in articles
     )
 
     today = datetime.now().strftime("%A, %B %d, %Y")
+    print(f"Sending {len(articles)} articles to Claude (~{len(articles_text)} chars)")
 
     prompt = f"""You are writing a morning news brief for someone on garden leave from a senior role at an ETF issuer. They stay informed on the industry but are not currently working. Today is {today}.
 

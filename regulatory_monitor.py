@@ -49,6 +49,12 @@ COMMENTARY_FEEDS = [
      "https://news.google.com/rss/search?q=Nate+Geraci+ETF+Prime&hl=en-US&gl=US&ceid=US:en"),
 ]
 
+# Matt Levine gets his own feed group so the prompt can treat him separately
+LEVINE_FEED_URL = "https://kill-the-newsletter.com/feeds/693pfik7dijxtdctxmp6.xml"
+LEVINE_FEEDS = [
+    ("Matt Levine / Money Stuff", LEVINE_FEED_URL),
+]
+
 ISSUER_FEEDS = [
     ("Google: iShares insights",
      "https://news.google.com/rss/search?q=iShares+BlackRock+ETF+outlook+commentary&hl=en-US&gl=US&ceid=US:en"),
@@ -65,6 +71,7 @@ ALL_FEED_GROUPS = {
     "Industry":   INDUSTRY_FEEDS,
     "Commentary": COMMENTARY_FEEDS,
     "Issuer":     ISSUER_FEEDS,
+    "Levine":     LEVINE_FEEDS,
 }
 
 # ---------------------------------------------------------------------------
@@ -139,22 +146,24 @@ def format_articles(articles):
     )
 
 
-def analyze(regulatory_articles, general_articles):
+def analyze(regulatory_articles, general_articles, articles):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=3)
 
     week_ending = datetime.now().strftime("%B %d, %Y")
-    reg_text = format_articles(regulatory_articles) if regulatory_articles else "None this week."
-    gen_text = format_articles(general_articles[:60])  # cap to keep prompt size manageable
+    reg_text     = format_articles(regulatory_articles) if regulatory_articles else "None this week."
+    gen_text     = format_articles(general_articles[:60])
+    levine_arts  = [a for a in articles if a["group"] == "Levine"]
+    levine_text  = format_articles(levine_arts) if levine_arts else "No issues this week."
 
     prompt = f"""You are producing a weekly regulatory and microstructure intelligence briefing for a senior ETF industry professional on garden leave. Week ending {week_ending}.
 
 The reader knows the industry deeply. Be specific, name names, cite sources. Skip boilerplate.
 
-You have two sets of content below.
+You have three sets of content below.
 
 ---
 
-SECTION A — CONCRETE REGULATORY ACTIONS (from SEC RSS feeds this week):
+SECTION A — CONCRETE REGULATORY ACTIONS (SEC RSS feeds):
 {reg_text}
 
 ---
@@ -164,28 +173,38 @@ SECTION B — INDUSTRY CONTENT (news, commentary, issuer thought leadership):
 
 ---
 
+SECTION C — MATT LEVINE / MONEY STUFF (full newsletter issues):
+{levine_text}
+
+---
+
 Produce the briefing in this exact structure using Slack markdown (*bold* not **bold**, no # headers):
 
 *Regulatory Actions This Week*
-List only concrete actions: proposed rules, final rules adopted, no-action letters, exemptive orders, enforcement actions. If none, write "None this week." Use one bullet per action with the rule/order name, what it does, and why it matters to ETFs. Include the source name inline.
+List only concrete actions: proposed rules, final rules adopted, no-action letters, exemptive orders, enforcement actions. If none, write "None this week." One bullet per action — rule/order name, what it does, why it matters to ETFs. Cite source inline.
 
 ---
 
 *Emerging Themes*
-Identify the distinct themes emerging across the industry content this week. Be adaptive — if there are 2 strong themes, write 2. If there are 7, write 7. Don't pad and don't compress.
+Identify distinct themes from Sections A and B. Be adaptive — surface as many themes as genuinely exist, don't pad and don't compress.
 
 For each theme:
 *Theme: [one-line title]*
 _Why it matters:_ one sentence
-_Signals:_ 2–3 bullets — specific data points, quotes, or moves that indicate this theme. Name companies, people, and products. Cite the source in brackets.
+_Signals:_ 2–3 bullets with specific data points, quotes, or moves. Name companies, people, products. Cite source in brackets.
+
+---
+
+*Levine This Week* (include this section only if Section C contains material relevant to ETFs, asset management, market structure, or tokenisation — omit the section entirely if it doesn't)
+If relevant: 2–4 bullets on the specific passages or arguments from Money Stuff that connect to the themes above or raise independent points worth tracking. Quote him briefly where it adds colour. If his coverage this week is purely about M&A, banking, or other unrelated topics, skip this section without comment.
 
 ---
 
 Formatting rules:
-- Each theme is separated by a blank line
-- Mobile-scannable: the theme title and first bullet must deliver the point without the reader needing to expand anything
-- Source citations in brackets, e.g. [ETF.com], [SEC Final Rules], [Balchunas/Bloomberg]
-- Do not summarise individual articles — identify patterns across sources"""
+- Each theme separated by a blank line
+- Mobile-scannable: theme title + first bullet must deliver the point standalone
+- Source citations in brackets: [ETF.com], [SEC Final Rules], [Levine/Bloomberg]
+- Identify patterns across sources — do not summarise individual articles"""
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -259,7 +278,7 @@ def main():
     print(f"Regulatory actions: {len(regulatory)}, General: {len(general)}")
 
     print("Analyzing with Claude...")
-    briefing = analyze(regulatory, general)
+    briefing = analyze(regulatory, general, articles)
     print(briefing)
 
     print("Posting to Slack...")

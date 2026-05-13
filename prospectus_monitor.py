@@ -70,9 +70,10 @@ def get_all_hits(form_type, start_dt, end_dt):
 # Document fetching
 # ---------------------------------------------------------------------------
 
-def get_main_doc_url(accession_no):
+def get_main_doc_url(accession_no, cik=None):
     """Derive filing index URL from accession number and find the main HTM document."""
-    cik = accession_no.split("-")[0].lstrip("0")
+    if not cik:
+        cik = accession_no.split("-")[0].lstrip("0")
     nodashes = accession_no.replace("-", "")
     index_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{nodashes}/{accession_no}-index.json"
     try:
@@ -298,26 +299,21 @@ def main():
             if new_count >= MAX_FILINGS_PER_RUN:
                 break
 
-            # EFTS _id is "{accession}:{document_name}" — strip the document part
-            raw_id = hit.get("_id", "")
-            accession = raw_id.split(":")[0]
+            src = hit.get("_source", {})
+            accession = src.get("adsh") or hit.get("_id", "").split(":")[0]
             if not accession or accession in processed or accession in seen_accessions:
                 continue
             seen_accessions.add(accession)
 
-            src = hit.get("_source", {})
-            # EFTS uses several possible field names for the entity
-            entity = (
-                src.get("entity_name")
-                or src.get("display_names", [{}])[0].get("name", "")
-                or src.get("filer_id", "")
-                or "Unknown"
-            )
-            filed = (src.get("filed_at") or src.get("file_date") or "")[:10]
+            names = src.get("display_names", [])
+            entity = names[0] if isinstance(names, list) and names else "Unknown"
+            filed = (src.get("file_date") or "")[:10]
+            ciks = src.get("ciks", [])
 
             print(f"  {entity} / {accession}")
 
-            doc_url = get_main_doc_url(accession)
+            cik_str = str(ciks[0]) if ciks else None
+            doc_url = get_main_doc_url(accession, cik_str)
             if not doc_url:
                 print(f"    No document URL, skipping")
                 processed.add(accession)
